@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Track Ambulance</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f4f7fb;
+    }
+
+    header {
+      padding: 14px 18px;
+      background: white;
+      border-bottom: 1px solid #ddd;
+      font-weight: bold;
+    }
+
+    #wrap {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 12px;
+      padding: 12px;
+    }
+
+    #panel {
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      padding: 14px;
+      height: fit-content;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      color: #555;
+    }
+
+    input {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      box-sizing: border-box;
+    }
+
+    button {
+      margin-top: 12px;
+      width: 100%;
+      padding: 10px;
+      border: 0;
+      border-radius: 8px;
+      background: #d62828;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    #info {
+      margin-top: 12px;
+      font-size: 14px;
+      color: #444;
+      line-height: 1.5;
+    }
+
+    #distance {
+      margin-top: 8px;
+      font-size: 14px;
+      font-weight: bold;
+      color: #1463ff;
+      background: rgba(20, 99, 255, 0.1);
+      border: 1px solid rgba(20, 99, 255, 0.25);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+
+    #eta {
+      margin-top: 8px;
+      font-size: 14px;
+      font-weight: bold;
+      color: #117733;
+      background: rgba(17, 119, 51, 0.1);
+      border: 1px solid rgba(17, 119, 51, 0.25);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+
+    #map {
+      height: 80vh;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .ambulance-icon {
+      width: 34px;
+      height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.25));
+    }
+
+    .user-icon {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #1463ff;
+      border: 3px solid #ffffff;
+      box-shadow: 0 0 0 3px rgba(20, 99, 255, 0.25);
+    }
+
+    @media (max-width: 900px) {
+      #wrap {
+        grid-template-columns: 1fr;
+      }
+
+      #map {
+        height: 65vh;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>Live Ambulance Tracker</header>
+
+  <div id="wrap">
+    <section id="panel">
+      <label for="caseId">Enter Case ID</label>
+      <input id="caseId" placeholder="CASE-001" />
+      <button id="trackBtn">Track</button>
+      <div id="info">Waiting for ambulance location...</div>
+      <div id="distance">Distance: waiting for your location...</div>
+      <div id="eta">Estimated arrival time: waiting for your location...</div>
+    </section>
+
+    <section id="map"></section>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const fixedAmbulanceLocation = {
+  lat: 13.02153,
+  lng:74.96866 ,
+  name: "Alva's Health Care Center Ambulance"
+};
+
+    const caseIdEl = document.getElementById("caseId");
+    const trackBtn = document.getElementById("trackBtn");
+    const infoEl = document.getElementById("info");
+    const distanceEl = document.getElementById("distance");
+    const etaEl = document.getElementById("eta");
+
+    const map = L.map("map").setView([20.5937, 78.9629], 5);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap"
+    }).addTo(map);
+
+    let selectedCaseId = "";
+    let marker = null;
+    let userMarker = null;
+    let routeLine = null;
+    let routePoints = [];
+    let ambulanceLocation = null;
+    let userLocation = null;
+    let userWatchId = null;
+    let distanceLine = null;
+    const estimatedAmbulanceSpeedKmPerHour = 35;
+
+    const ambulanceIcon = L.divIcon({
+      className: "",
+      html: '<div class="ambulance-icon">&#128657;</div>',
+      iconSize: [34, 34],
+      iconAnchor: [17, 17]
+    });
+
+    const userIcon = L.divIcon({
+      className: "",
+      html: '<div class="user-icon"></div>',
+      iconSize: [18, 18],
+      iconAnchor: [9, 9]
+    });
+
+    function toRadians(value) {
+      return (value * Math.PI) / 180;
+    }
+
+    function getDistanceKm(from, to) {
+      const earthRadiusKm = 6371;
+      const dLat = toRadians(to.lat - from.lat);
+      const dLng = toRadians(to.lng - from.lng);
+      const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(toRadians(from.lat)) *
+          Math.cos(toRadians(to.lat)) *
+          Math.sin(dLng / 2) *
+          Math.sin(dLng / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return earthRadiusKm * c;
+    }
+
+    function updateDistanceText() {
+      if (!userLocation) {
+        distanceEl.textContent = "Distance: allow location access to see your distance from the ambulance.";
+        etaEl.textContent = "Estimated arrival time: allow location access to calculate ETA.";
+        if (distanceLine) {
+          map.removeLayer(distanceLine);
+          distanceLine = null;
+        }
+        return;
+      }
+
+      if (!fixedAmbulanceLocation) {
+        distanceEl.textContent = "Distance: waiting for ambulance location...";
+        etaEl.textContent = "Estimated arrival time: waiting for ambulance location...";
+        if (distanceLine) {
+          map.removeLayer(distanceLine);
+          distanceLine = null;
+        }
+        return;
+      }
+
+      const distanceKm = getDistanceKm(userLocation, fixedAmbulanceLocation);
+      const etaMinutes = Math.ceil((distanceKm / estimatedAmbulanceSpeedKmPerHour) * 60);
+      distanceEl.textContent =
+        distanceKm < 1
+          ? `Distance: ${(distanceKm * 1000).toFixed(0)} meters away`
+          : `Distance: ${distanceKm.toFixed(2)} km away`;
+      etaEl.textContent =
+        etaMinutes < 60
+          ? `Estimated arrival time: about ${etaMinutes} minutes`
+          : `Estimated arrival time: about ${Math.floor(etaMinutes / 60)} hr ${etaMinutes % 60} min`;
+
+      const latLngs = [
+        [userLocation.lat, userLocation.lng],
+        [fixedAmbulanceLocation.lat, fixedAmbulanceLocation.lng]
+      ];
+
+      if (!distanceLine) {
+        distanceLine = L.polyline(latLngs, {
+          color: "#1463ff",
+          weight: 4,
+          opacity: 0.85,
+          dashArray: "10 8"
+        }).addTo(map);
+      } else {
+        distanceLine.setLatLngs(latLngs);
+      }
+    }
+
+    function startUserLocationTracking() {
+      if (!navigator.geolocation || userWatchId !== null) return;
+
+      userWatchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          userLocation = {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude
+          };
+
+          if (!userMarker) {
+            userMarker = L.marker([userLocation.lat, userLocation.lng], {
+              icon: userIcon
+            }).addTo(map).bindPopup("You are here");
+          } else {
+            userMarker.setLatLng([userLocation.lat, userLocation.lng]);
+          }
+
+          updateDistanceText();
+        },
+        () => {
+          distanceEl.textContent = "Distance: unable to get your current location.";
+        },
+        {
+          enableHighAccuracy: true,
+          maximumAge: 5000,
+          timeout: 15000
+        }
+      );
+    }
+
+    function showFixedAmbulance() {
+      ambulanceLocation = {
+        lat: fixedAmbulanceLocation.lat,
+        lng: fixedAmbulanceLocation.lng
+      };
+
+      if (!marker) {
+        marker = L.marker([ambulanceLocation.lat, ambulanceLocation.lng], {
+          icon: ambulanceIcon
+        }).addTo(map).bindPopup(fixedAmbulanceLocation.name);
+      } else {
+        marker.setLatLng([ambulanceLocation.lat, ambulanceLocation.lng]);
+      }
+
+      map.setView([ambulanceLocation.lat, ambulanceLocation.lng], 15);
+      infoEl.textContent =
+        `${fixedAmbulanceLocation.name} | ${ambulanceLocation.lat.toFixed(5)}, ${ambulanceLocation.lng.toFixed(5)}`;
+      updateDistanceText();
+    }
+
+    trackBtn.addEventListener("click", () => {
+      selectedCaseId = caseIdEl.value.trim();
+      routePoints = [];
+
+      if (marker) {
+        map.removeLayer(marker);
+        marker = null;
+      }
+
+      if (routeLine) {
+        map.removeLayer(routeLine);
+        routeLine = null;
+      }
+
+      infoEl.textContent = selectedCaseId
+        ? `Tracking ambulance for ${selectedCaseId}...`
+        : "Please enter a Case ID.";
+      showFixedAmbulance();
+    });
+
+    startUserLocationTracking();
+    showFixedAmbulance();
+  </script>
+</body>
+</html>

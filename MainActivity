@@ -1,0 +1,29 @@
+private static final int SMS_PERMISSION_CODE = 1;
+
+private void requestSMSPermission() {
+    if (ActivityCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS)
+            != PackageManager.PERMISSION_GRANTED) {
+
+        ActivityCompat.requestPermissions(this,
+                new String[]{Manifest.permission.SEND_SMS},
+                SMS_PERMISSION_CODE);
+    }
+}
+requestSMSPermission();
+private void sendNotificationSMS() {
+
+    String phoneNumber = "7219474289";  // 👈 Put the number here
+    String message = "🔔 Notification: This is an alert from my app!";
+
+    try {
+        SmsManager smsManager = SmsManager.getDefault();
+        smsManager.sendTextMessage(phoneNumber, null, message, null, null);
+        Toast.makeText(this, "Notification Sent!", Toast.LENGTH_SHORT).show();
+    } catch (Exception e) {
+        Toast.makeText(this, "SMS Failed!", Toast.LENGTH_SHORT).show();
+        e.printStackTrace();
+    }
+}
+Button btn = findViewById(R.id.btnNotify);
+
+btn.setOnClickListener(v -> sendNotificationSMS());

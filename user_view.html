@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LifeLink - Ambulance Live Tracker</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --text: #132238;
+      --muted: #5e6b7a;
+      --accent: #c81e1e;
+      --danger: #c81e1e;
+      --ok: #117733;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background: radial-gradient(circle at top left, #ffecec, var(--bg) 55%);
+      color: var(--text);
+    }
+
+    header {
+      padding: 14px 18px;
+      font-weight: 700;
+      background: var(--panel);
+      border-bottom: 1px solid #d8e1ec;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    #status {
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    #wrap {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 12px;
+      padding: 12px;
+    }
+
+    #panel {
+      background: var(--panel);
+      border: 1px solid #d8e1ec;
+      border-radius: 10px;
+      padding: 12px;
+      height: fit-content;
+    }
+
+    label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin: 10px 0 6px;
+    }
+
+    input {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #d8e1ec;
+      border-radius: 8px;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-weight: 700;
+      cursor: pointer;
+      background: var(--accent);
+      color: #fff;
+      margin-top: 10px;
+      width: 100%;
+    }
+
+    #map {
+      height: 80vh;
+      border: 1px solid #d8e1ec;
+      border-radius: 10px;
+      overflow: hidden;
+      background: #dde6f3;
+    }
+
+    .meta {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 10px;
+    }
+
+    @media (max-width: 900px) {
+      #wrap { grid-template-columns: 1fr; }
+      #map { height: 65vh; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>LifeLink - Ambulance Live Tracker</div>
+    <div id="status">Connecting...</div>
+  </header>
+
+  <div id="wrap">
+    <section id="panel">
+      <label for="caseId">Case ID (to track ambulance)</label>
+      <input id="caseId" placeholder="CASE-001" />
+      <button id="applyBtn">Track Ambulance</button>
+      <div id="info" class="meta">Waiting for ambulance updates...</div>
+    </section>
+    <section id="map"></section>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const statusEl = document.getElementById("status");
+    const caseIdEl = document.getElementById("caseId");
+    const infoEl = document.getElementById("info");
+    const applyBtn = document.getElementById("applyBtn");
+
+    const map = L.map("map").setView([20.5937, 78.9629], 5);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap"
+    }).addTo(map);
+
+    let selectedCaseId = "";
+    let marker = null;
+    let pathLine = null;
+    let pathPoints = [];
+
+    function updateInfo(row) {
+      infoEl.textContent = `Ambulance: ${row.lat.toFixed(5)}, ${row.lng.toFixed(5)} | ${new Date(row.timestamp).toLocaleTimeString()}`;
+    }
+
+    function handleUpdate(row) {
+      if ((row.source || "user") !== "ambulance") return;
+      if (selectedCaseId && row.caseId !== selectedCaseId) return;
+
+      pathPoints.push([row.lat, row.lng]);
+      if (!pathLine) {
+        pathLine = L.polyline(pathPoints, { color: "#c81e1e", weight: 4, opacity: 0.85 }).addTo(map);
+      } else {
+        pathLine.setLatLngs(pathPoints);
+      }
+
+      if (!marker) {
+        marker = L.marker([row.lat, row.lng]).addTo(map).bindPopup(`${row.caseId} (ambulance)`);
+      } else {
+        marker.setLatLng([row.lat, row.lng]);
+      }
+      updateInfo(row);
+      map.setView([row.lat, row.lng], 15);
+    }
+
+    applyBtn.addEventListener("click", () => {
+      selectedCaseId = (caseIdEl.value || "").trim();
+      pathPoints = [];
+      if (pathLine) {
+        map.removeLayer(pathLine);
+        pathLine = null;
+      }
+      infoEl.textContent = selectedCaseId
+        ? `Tracking ambulance for ${selectedCaseId}...`
+        : "Tracking all ambulances...";
+    });
+
+    const socket = io();
+    socket.on("connect", () => {
+      statusEl.textContent = "Connected";
+      statusEl.style.color = "#117733";
+    });
+    socket.on("disconnect", () => {
+      statusEl.textContent = "Disconnected";
+      statusEl.style.color = "#c81e1e";
+    });
+    socket.on("bootstrap_cases", (rows) => rows.forEach(handleUpdate));
+    socket.on("location_update", (row) => handleUpdate(row));
+  </script>
+</body>
+</html>

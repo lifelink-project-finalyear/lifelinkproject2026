@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Live Location Sender</title>
+</head>
+<body>
+
+<h2>📍 Sharing Live Location</h2>
+<button onclick="stopSharing()">🛑 Stop Sharing</button>
+
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
+<script>
+var firebaseConfig = {
+  apiKey: "PASTE_REAL_KEY",
+  authDomain: "PROJECT.firebaseapp.com",
+  databaseURL: "https://PROJECT.firebaseio.com",
+  projectId: "PROJECT",
+};
+firebase.initializeApp(firebaseConfig);
+
+var userId = "user1";
+var watchId;
+
+// ✅ Check browser support
+if (!navigator.geolocation) {
+  alert("Geolocation not supported!");
+}
+
+// ✅ Start tracking
+watchId = navigator.geolocation.watchPosition(
+  function(pos){
+    var lat = pos.coords.latitude;
+    var lng = pos.coords.longitude;
+
+    console.log("Location:", lat, lng);
+
+    firebase.database().ref("users/" + userId + "/current").set({lat:lat, lng:lng});
+    firebase.database().ref("users/" + userId + "/route").push({lat:lat, lng:lng});
+  },
+  function(error){
+    alert("Location Error: " + error.message);
+  },
+  {
+    enableHighAccuracy: true
+  }
+);
+
+// 🛑 Stop
+function stopSharing(){
+  navigator.geolocation.clearWatch(watchId);
+  alert("Location sharing stopped");
+}
+</script>
+
+</body>
+</html>

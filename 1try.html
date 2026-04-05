@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LifeLink Admin Tracker</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --text: #132238;
+      --muted: #5e6b7a;
+      --accent: #1463ff;
+      --danger: #c81e1e;
+      --ok: #117733;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background: radial-gradient(circle at top left, #e9f1ff, var(--bg) 55%);
+      color: var(--text);
+    }
+
+    header {
+      padding: 14px 18px;
+      font-weight: 700;
+      background: var(--panel);
+      border-bottom: 1px solid #d8e1ec;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    #status {
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    #wrap {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 12px;
+      padding: 12px;
+    }
+
+    #panel {
+      background: var(--panel);
+      border: 1px solid #d8e1ec;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    #cases {
+      max-height: 76vh;
+      overflow: auto;
+    }
+
+    .case {
+      padding: 10px 12px;
+      border-bottom: 1px solid #eef2f7;
+      cursor: pointer;
+    }
+
+    .case:hover {
+      background: #f4f8ff;
+    }
+
+    .case.active {
+      background: #e8f0ff;
+      border-left: 4px solid var(--accent);
+    }
+
+    .title {
+      font-weight: 700;
+    }
+
+    .meta {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    #map {
+      height: 80vh;
+      border: 1px solid #d8e1ec;
+      border-radius: 10px;
+      overflow: hidden;
+      background: #dde6f3;
+    }
+
+    @media (max-width: 900px) {
+      #wrap { grid-template-columns: 1fr; }
+      #map { height: 65vh; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>LifeLink Dispatch - Live Case Tracker</div>
+    <div id="status">Connecting...</div>
+  </header>
+
+  <div id="wrap">
+    <section id="panel">
+      <div style="padding:10px 12px;font-weight:700;border-bottom:1px solid #eef2f7">Active Cases</div>
+      <div id="cases"></div>
+    </section>
+    <section id="map"></section>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const statusEl = document.getElementById("status");
+    const casesEl = document.getElementById("cases");
+
+    const map = L.map("map").setView([20.5937, 78.9629], 5);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap"
+    }).addTo(map);
+
+    const markers = new Map();
+    const dataByKey = new Map();
+    let selectedKey = null;
+
+    function staleAgeText(ts) {
+      const diffSec = Math.floor((Date.now() - Number(ts)) / 1000);
+      if (diffSec < 60) return `${diffSec}s ago`;
+      const min = Math.floor(diffSec / 60);
+      return `${min}m ago`;
+    }
+
+    function renderCases() {
+      const rows = Array.from(dataByKey.values()).sort((a, b) => Number(b.timestamp) - Number(a.timestamp));
+
+      if (!rows.length) {
+        casesEl.innerHTML = '<div style="padding:12px;color:#5e6b7a">No cases yet.</div>';
+        return;
+      }
+
+      casesEl.innerHTML = rows.map((row) => {
+        const staleSec = Math.floor((Date.now() - Number(row.timestamp)) / 1000);
+        const staleMark = staleSec > 30 ? " | STALE" : "";
+        const key = `${row.caseId}:${row.source || "user"}`;
+        const isActive = key === selectedKey;
+        return `
+          <div class="case ${isActive ? "active" : ""}" onclick="focusCase('${row.caseId}', '${row.source || "user"}')">
+            <div class="title">${row.caseId} (${row.source || "user"})</div>
+            <div class="meta">Patient: ${row.patientId} | Disease: ${row.diseaseType}</div>
+            <div class="meta">${row.lat.toFixed(5)}, ${row.lng.toFixed(5)} | ${staleAgeText(row.timestamp)}${staleMark}</div>
+          </div>`;
+      }).join("");
+    }
+
+    function ensureMarker(row) {
+      const key = `${row.caseId}:${row.source || "user"}`;
+      let marker = markers.get(key);
+      const text = `${row.caseId} (${row.source || "user"})`;
+
+      if (!marker) {
+        marker = L.marker([row.lat, row.lng]).addTo(map).bindPopup(text);
+        markers.set(key, marker);
+      } else {
+        marker.setLatLng([row.lat, row.lng]);
+        marker.setPopupContent(text);
+      }
+    }
+
+    function onCaseUpdate(row) {
+      const key = `${row.caseId}:${row.source || "user"}`;
+      dataByKey.set(key, row);
+      ensureMarker(row);
+      renderCases();
+
+      if (!selectedKey) selectedKey = key;
+      if (selectedKey === key) map.setView([row.lat, row.lng], 15);
+    }
+
+    function focusCase(caseId, source) {
+      const key = `${caseId}:${source || "user"}`;
+      selectedKey = key;
+      const row = dataByKey.get(key);
+      if (row) {
+        map.setView([row.lat, row.lng], 15);
+        const marker = markers.get(key);
+        if (marker) marker.openPopup();
+      }
+      renderCases();
+    }
+
+    window.focusCase = focusCase;
+
+    const socket = io();
+    socket.on("connect", () => {
+      statusEl.textContent = "Connected";
+      statusEl.style.color = "#117733";
+    });
+
+    socket.on("disconnect", () => {
+      statusEl.textContent = "Disconnected";
+      statusEl.style.color = "#c81e1e";
+    });
+
+    socket.on("bootstrap_cases", (rows) => rows.forEach(onCaseUpdate));
+    socket.on("location_update", (row) => onCaseUpdate(row));
+
+    setInterval(renderCases, 5000);
+  </script>
+</body>
+</html>
